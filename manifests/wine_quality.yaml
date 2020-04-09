@@ -1,0 +1,290 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  annotations:
+    pipelines.kubeflow.org/pipeline_spec: '{"description": "Modeling wine preferences
+      by data mining from physicochemical properties. In Decision Support Systems,
+      Elsevier, 47(4):547-553, 2009.\n        The data set used in this example is
+      from http://archive.ics.uci.edu/ml/datasets/Wine+Quality\n        P. Cortez,
+      A. Cerdeira, F. Almeida, T. Matos and J. Reis.", "inputs": [{"default": "0.5",
+      "name": "alpha", "optional": true}, {"default": "0.5", "name": "l1_ratio", "optional":
+      true}], "name": "Wine Quality Pipeline"}'
+  generateName: wine-quality-pipeline-
+spec:
+  arguments:
+    parameters:
+    - name: alpha
+      value: '0.5'
+    - name: l1_ratio
+      value: '0.5'
+  entrypoint: wine-quality-pipeline
+  serviceAccountName: pipeline-runner
+  templates:
+  - container:
+      args:
+      - --sk-model
+      - '{{inputs.parameters.train-sk_model}}'
+      - --test-x
+      - '{{inputs.parameters.load-data-test_x}}'
+      - --test-y
+      - '{{inputs.parameters.load-data-test_y}}'
+      - '----output-paths'
+      - /tmp/outputs/rmse/data
+      - /tmp/outputs/mae/data
+      - /tmp/outputs/r2/data
+      - /tmp/outputs/mlpipeline_metrics/data
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas' 'sklearn' 'cloudpickle' 'numpy' || PIP_DISABLE_PIP_VERSION_CHECK=1
+        python3 -m pip install --quiet --no-warn-script-location 'pandas' 'sklearn'
+        'cloudpickle' 'numpy' --user) && "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - "from typing import NamedTuple\n\ndef evaluate(sk_model: bytes, test_x: str,\
+        \ test_y: str) -> NamedTuple('EvaluateOutput', [('rmse', float), ('mae', float),\
+        \ ('r2', float), ('mlpipeline_metrics', 'Metrics')]):\n    import ast\n  \
+        \  import cloudpickle\n    lr = cloudpickle.loads(ast.literal_eval(sk_model))\n\
+        \n    import pandas as pd\n    test_x_df = pd.read_json(test_x, orient='split')\n\
+        \    test_y_df = pd.read_json(test_y, orient='split')\n\n    import numpy\
+        \ as np\n    from sklearn.metrics import mean_squared_error, mean_absolute_error,\
+        \ r2_score\n    np.random.seed(40)\n    predicted_qualities = lr.predict(test_x_df)\n\
+        \n    rmse = np.sqrt(mean_squared_error(test_y_df, predicted_qualities))\n\
+        \    mae = mean_absolute_error(test_y_df, predicted_qualities)\n    r2 = r2_score(test_y_df,\
+        \ predicted_qualities)\n\n    import json\n\n    metrics = {\n      'metrics':\
+        \ [{\n          'name': 'rmse',\n          'numberValue':  float(rmse),\n\
+        \        },{\n          'name': 'mae',\n          'numberValue':  float(mae),\n\
+        \        }]}\n\n    print(metrics)\n\n    from collections import namedtuple\n\
+        \    evaluate_output = namedtuple('EvaluateOutput', ['rmse', 'mae', 'r2',\
+        \ 'mlpipeline_metrics'])\n    return evaluate_output(rmse, mae, r2, json.dumps(metrics))\n\
+        \ndef _serialize_float(float_value: float) -> str:\n    if isinstance(float_value,\
+        \ str):\n        return float_value\n    if not isinstance(float_value, (float,\
+        \ int)):\n        raise TypeError('Value \"{}\" has type \"{}\" instead of\
+        \ float.'.format(str(float_value), str(type(float_value))))\n    return str(float_value)\n\
+        \nimport argparse\n_parser = argparse.ArgumentParser(prog='Evaluate', description='')\n\
+        _parser.add_argument(\"--sk-model\", dest=\"sk_model\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--test-x\", dest=\"test_x\"\
+        , type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --test-y\", dest=\"test_y\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"----output-paths\", dest=\"_output_paths\", type=str,\
+        \ nargs=4)\n_parsed_args = vars(_parser.parse_args())\n_output_files = _parsed_args.pop(\"\
+        _output_paths\", [])\n\n_outputs = evaluate(**_parsed_args)\n\nif not hasattr(_outputs,\
+        \ '__getitem__') or isinstance(_outputs, str):\n    _outputs = [_outputs]\n\
+        \n_output_serializers = [\n    _serialize_float,\n    _serialize_float,\n\
+        \    _serialize_float,\n    str,\n\n]\n\nimport os\nfor idx, output_file in\
+        \ enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n\
+        \    except OSError:\n        pass\n    with open(output_file, 'w') as f:\n\
+        \        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: tensorflow/tensorflow:1.11.0-py3
+      volumeMounts:
+      - mountPath: /tmp
+        name: workdir
+    inputs:
+      parameters:
+      - name: load-data-test_x
+      - name: load-data-test_y
+      - name: train-sk_model
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/component_spec: '{"inputs": [{"name": "sk_model", "type":
+          "bytes"}, {"name": "test_x", "type": "String"}, {"name": "test_y", "type":
+          "String"}], "name": "Evaluate", "outputs": [{"name": "rmse", "type": "Float"},
+          {"name": "mae", "type": "Float"}, {"name": "r2", "type": "Float"}, {"name":
+          "mlpipeline_metrics", "type": "Metrics"}]}'
+    name: evaluate
+    outputs:
+      artifacts:
+      - name: mlpipeline-metrics
+        path: /tmp/outputs/mlpipeline_metrics/data
+      - name: evaluate-mae
+        path: /tmp/outputs/mae/data
+      - name: evaluate-r2
+        path: /tmp/outputs/r2/data
+      - name: evaluate-rmse
+        path: /tmp/outputs/rmse/data
+  - container:
+      args:
+      - '----output-paths'
+      - /tmp/outputs/train_x/data
+      - /tmp/outputs/test_x/data
+      - /tmp/outputs/train_y/data
+      - /tmp/outputs/test_y/data
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas' 'sklearn' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install
+        --quiet --no-warn-script-location 'pandas' 'sklearn' --user) && "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - "from typing import NamedTuple\n\ndef load_data() -> NamedTuple('LoadDataOutput',\
+        \ [('train_x', str), ('test_x', str), ('train_y', str), ('test_y', str)]):\n\
+        \    import os\n    import pandas as pd\n\n    # Read the wine-quality csv\
+        \ file from the URL\n    csv_url =\\\n        'http://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv'\n\
+        \    try:\n        data = pd.read_csv(csv_url, sep=';')\n    except Exception\
+        \ as e:\n        logger.exception(\n            \"Unable to download training\
+        \ & test CSV, check your internet connection. Error: %s\", e)\n\n    # Split\
+        \ the data into training and test sets. (0.75, 0.25) split.\n    from sklearn.model_selection\
+        \ import train_test_split\n    train, test = train_test_split(data)\n\n  \
+        \  # The predicted column is \"quality\" which is a scalar from [3, 9]\n \
+        \   train_x = train.drop(['quality'], axis=1).to_json(orient='split')\n  \
+        \  test_x = test.drop(['quality'], axis=1).to_json(orient='split')\n    train_y\
+        \ = train[['quality']].to_json(orient='split')\n    test_y = test[['quality']].to_json(orient='split')\n\
+        \n    from collections import namedtuple\n    load_data_output = namedtuple('LoadDataOutput',\
+        \ ['train_x', 'test_x', 'train_y', 'test_y'])\n    return load_data_output(train_x,\
+        \ test_x, train_y, test_y)\n\ndef _serialize_str(str_value: str) -> str:\n\
+        \    if not isinstance(str_value, str):\n        raise TypeError('Value \"\
+        {}\" has type \"{}\" instead of str.'.format(str(str_value), str(type(str_value))))\n\
+        \    return str_value\n\nimport argparse\n_parser = argparse.ArgumentParser(prog='Load\
+        \ data', description='')\n_parser.add_argument(\"----output-paths\", dest=\"\
+        _output_paths\", type=str, nargs=4)\n_parsed_args = vars(_parser.parse_args())\n\
+        _output_files = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = load_data(**_parsed_args)\n\
+        \nif not hasattr(_outputs, '__getitem__') or isinstance(_outputs, str):\n\
+        \    _outputs = [_outputs]\n\n_output_serializers = [\n    _serialize_str,\n\
+        \    _serialize_str,\n    _serialize_str,\n    _serialize_str,\n\n]\n\nimport\
+        \ os\nfor idx, output_file in enumerate(_output_files):\n    try:\n      \
+        \  os.makedirs(os.path.dirname(output_file))\n    except OSError:\n      \
+        \  pass\n    with open(output_file, 'w') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: tensorflow/tensorflow:1.11.0-py3
+      volumeMounts:
+      - mountPath: /tmp
+        name: workdir
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/component_spec: '{"name": "Load data", "outputs": [{"name":
+          "train_x", "type": "String"}, {"name": "test_x", "type": "String"}, {"name":
+          "train_y", "type": "String"}, {"name": "test_y", "type": "String"}]}'
+    name: load-data
+    outputs:
+      artifacts:
+      - name: load-data-test_x
+        path: /tmp/outputs/test_x/data
+      - name: load-data-test_y
+        path: /tmp/outputs/test_y/data
+      - name: load-data-train_x
+        path: /tmp/outputs/train_x/data
+      - name: load-data-train_y
+        path: /tmp/outputs/train_y/data
+      parameters:
+      - name: load-data-test_x
+        valueFrom:
+          path: /tmp/outputs/test_x/data
+      - name: load-data-test_y
+        valueFrom:
+          path: /tmp/outputs/test_y/data
+      - name: load-data-train_x
+        valueFrom:
+          path: /tmp/outputs/train_x/data
+      - name: load-data-train_y
+        valueFrom:
+          path: /tmp/outputs/train_y/data
+  - container:
+      args:
+      - --alpha
+      - '{{inputs.parameters.alpha}}'
+      - --l1-ratio
+      - '{{inputs.parameters.l1_ratio}}'
+      - --train-x
+      - '{{inputs.parameters.load-data-train_x}}'
+      - --train-y
+      - '{{inputs.parameters.load-data-train_y}}'
+      - '----output-paths'
+      - /tmp/outputs/sk_model/data
+      command:
+      - sh
+      - -c
+      - (PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location
+        'pandas' 'sklearn' 'cloudpickle' || PIP_DISABLE_PIP_VERSION_CHECK=1 python3
+        -m pip install --quiet --no-warn-script-location 'pandas' 'sklearn' 'cloudpickle'
+        --user) && "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - "from typing import NamedTuple\n\ndef train(alpha: float, l1_ratio: float,\
+        \ train_x: str, train_y: str) -> NamedTuple('TrainOutput', [('sk_model', bytes)]):\n\
+        \    from sklearn.linear_model import ElasticNet\n    lr = ElasticNet(alpha=alpha,\
+        \ l1_ratio=l1_ratio, random_state=42)\n\n    import pandas as pd\n    train_x_df\
+        \ = pd.read_json(train_x, orient='split')\n    train_y_df = pd.read_json(train_y,\
+        \ orient='split')\n\n    lr.fit(train_x_df, train_y_df)\n\n    import pickle\n\
+        \    sk_model = pickle.dumps(lr)\n\n    from collections import namedtuple\n\
+        \    train_output = namedtuple('TrainOutput', ['sk_model'])\n    return train_output(sk_model)\n\
+        \nimport argparse\n_parser = argparse.ArgumentParser(prog='Train', description='')\n\
+        _parser.add_argument(\"--alpha\", dest=\"alpha\", type=float, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"--l1-ratio\", dest=\"\
+        l1_ratio\", type=float, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"\
+        --train-x\", dest=\"train_x\", type=str, required=True, default=argparse.SUPPRESS)\n\
+        _parser.add_argument(\"--train-y\", dest=\"train_y\", type=str, required=True,\
+        \ default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\", dest=\"\
+        _output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n\
+        _output_files = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = train(**_parsed_args)\n\
+        \nif not hasattr(_outputs, '__getitem__') or isinstance(_outputs, str):\n\
+        \    _outputs = [_outputs]\n\n_output_serializers = [\n    str,\n\n]\n\nimport\
+        \ os\nfor idx, output_file in enumerate(_output_files):\n    try:\n      \
+        \  os.makedirs(os.path.dirname(output_file))\n    except OSError:\n      \
+        \  pass\n    with open(output_file, 'w') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"
+      image: tensorflow/tensorflow:1.11.0-py3
+      volumeMounts:
+      - mountPath: /tmp
+        name: workdir
+    inputs:
+      parameters:
+      - name: alpha
+      - name: l1_ratio
+      - name: load-data-train_x
+      - name: load-data-train_y
+    metadata:
+      annotations:
+        pipelines.kubeflow.org/component_spec: '{"inputs": [{"name": "alpha", "type":
+          "Float"}, {"name": "l1_ratio", "type": "Float"}, {"name": "train_x", "type":
+          "String"}, {"name": "train_y", "type": "String"}], "name": "Train", "outputs":
+          [{"name": "sk_model", "type": "bytes"}]}'
+    name: train
+    outputs:
+      artifacts:
+      - name: train-sk_model
+        path: /tmp/outputs/sk_model/data
+      parameters:
+      - name: train-sk_model
+        valueFrom:
+          path: /tmp/outputs/sk_model/data
+  - dag:
+      tasks:
+      - arguments:
+          parameters:
+          - name: load-data-test_x
+            value: '{{tasks.load-data.outputs.parameters.load-data-test_x}}'
+          - name: load-data-test_y
+            value: '{{tasks.load-data.outputs.parameters.load-data-test_y}}'
+          - name: train-sk_model
+            value: '{{tasks.train.outputs.parameters.train-sk_model}}'
+        dependencies:
+        - load-data
+        - train
+        name: evaluate
+        template: evaluate
+      - name: load-data
+        template: load-data
+      - arguments:
+          parameters:
+          - name: alpha
+            value: '{{inputs.parameters.alpha}}'
+          - name: l1_ratio
+            value: '{{inputs.parameters.l1_ratio}}'
+          - name: load-data-train_x
+            value: '{{tasks.load-data.outputs.parameters.load-data-train_x}}'
+          - name: load-data-train_y
+            value: '{{tasks.load-data.outputs.parameters.load-data-train_y}}'
+        dependencies:
+        - load-data
+        name: train
+        template: train
+    inputs:
+      parameters:
+      - name: alpha
+      - name: l1_ratio
+    name: wine-quality-pipeline
+  volumes:
+  - name: workdir
